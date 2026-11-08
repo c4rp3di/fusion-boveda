@@ -210,16 +210,38 @@ class DesbloqueoActivity : ActividadBoveda() {
     }
 
     /** Fin del desbloqueo: o entrega las credenciales al autocompletado, o abre la bóveda. */
+    /** Abre el editor con los datos del formulario que se vieron con la bóveda cerrada, para que el usuario los confirme. */
+    private fun abrirEditorConPendiente(): Boolean {
+        val p = PendienteGuardar.tomar() ?: return false
+        val i = Intent(this, EditarCredencialActivity::class.java)
+        i.putExtra(EditarCredencialActivity.EXTRA_PRE_TITULO, p.dominio ?: p.paquete)
+        i.putExtra(EditarCredencialActivity.EXTRA_PRE_USUARIO, p.usuario)
+        i.putExtra(EditarCredencialActivity.EXTRA_PRE_CLAVE, p.clave)
+        i.putExtra(EditarCredencialActivity.EXTRA_PRE_URL, if (p.dominio != null) "https://" + p.dominio else "")
+        i.putExtra(EditarCredencialActivity.EXTRA_PRE_APP, if (p.dominio == null) p.paquete else "")
+        startActivity(i)
+        return true
+    }
+
     private fun terminar() {
-        if (intent.getBooleanExtra(ExtrasAutofill.ES_AUTOFILL, false)) {
+        if (intent.getBooleanExtra(ExtrasAutofill.ES_GUARDAR, false)) {
+            // Vino del aviso «Guardar en La Bóveda» con la bóveda cerrada: ahora que está abierta, se abre el editor relleno.
+            if (!abrirEditorConPendiente()) startActivity(Intent(this, PrincipalActivity::class.java))
+            setResult(Activity.RESULT_CANCELED)
+            finish()
+        } else if (intent.getBooleanExtra(ExtrasAutofill.ES_AUTOFILL, false)) {
             val campos = ExtrasAutofill.leer(intent)
             lifecycleScope.launch {
-                val respuesta = withContext(Dispatchers.IO) { ConstructorRespuesta.conDatos(applicationContext, campos) }
-                android.util.Log.d("BovedaAutofill", "desbloqueo terminado: respuesta=" + (respuesta != null))
-                if (respuesta != null) {
+                val r = withContext(Dispatchers.IO) { ConstructorRespuesta.construir(applicationContext, campos) }
+                android.util.Log.d("BovedaAutofill", "desbloqueo terminado: coincidencias=" + r.coincidencias)
+                val respuesta = r.respuesta
+                if (respuesta != null && r.coincidencias > 0) {
+                    PendienteGuardar.olvidar()
                     setResult(Activity.RESULT_OK, Intent().putExtra(AutofillManager.EXTRA_AUTHENTICATION_RESULT, respuesta))
                 } else {
+                    // Sin credenciales para este sitio: si se estaba rellenando un registro, se ofrece guardarlo ya relleno.
                     setResult(Activity.RESULT_CANCELED)
+                    abrirEditorConPendiente()
                 }
                 finish()
             }
