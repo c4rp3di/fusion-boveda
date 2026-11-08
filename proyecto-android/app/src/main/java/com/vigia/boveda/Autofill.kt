@@ -18,6 +18,7 @@ import android.service.autofill.SaveInfo
 import android.service.autofill.SaveRequest
 import android.text.InputType
 import android.util.Log
+import java.util.regex.Pattern
 import android.view.View
 import android.view.autofill.AutofillId
 import android.view.autofill.AutofillValue
@@ -53,6 +54,7 @@ class CamposAutofill(
 /** Paso de los campos al diálogo de desbloqueo y vuelta. */
 object ExtrasAutofill {
     const val ES_AUTOFILL = "es_autofill"
+    const val ES_GUARDAR = "es_guardar"
     private const val USUARIO = "usuario_id"
     private const val CLAVE = "clave_id"
     private const val DOMINIO = "dominio"
@@ -271,8 +273,25 @@ object ConstructorRespuesta {
     }
 
     /** Bóveda abierta: un dato por credencial que encaje, y la opción de guardar lo que se escriba. */
+    class Resultado(val respuesta: FillResponse?, val coincidencias: Int)
+
+    /** Los conjuntos de datos se muestran siempre, aunque el usuario ya haya tecleado algo en el campo. */
+    private val SIN_FILTRO: Pattern = Pattern.compile(".*", Pattern.DOTALL)
+
+    private fun poner(d: Dataset.Builder, id: AutofillId, valor: String) {
+        if (Build.VERSION.SDK_INT >= 27) {
+            d.setValue(id, AutofillValue.forText(valor), SIN_FILTRO)
+        } else {
+            d.setValue(id, AutofillValue.forText(valor))
+        }
+    }
+
     suspend fun conDatos(c: Context, campos: CamposAutofill, peticion: FillRequest? = null): FillResponse? {
-        val dao = BovedaDb.actual()?.credenciales() ?: return null
+        return construir(c, campos, peticion).respuesta
+    }
+
+    suspend fun construir(c: Context, campos: CamposAutofill, peticion: FillRequest? = null): Resultado {
+        val dao = BovedaDb.actual()?.credenciales() ?: return Resultado(null, 0)
         val b = FillResponse.Builder()
         var hay = false
         var conjuntos = 0
@@ -285,11 +304,11 @@ object ConstructorRespuesta {
             }
             var valores = 0
             if (campos.usuarioId != null) {
-                d.setValue(campos.usuarioId, AutofillValue.forText(cred.usuario))
+                poner(d, campos.usuarioId, cred.usuario)
                 valores++
             }
             if (campos.claveId != null) {
-                d.setValue(campos.claveId, AutofillValue.forText(cred.clave))
+                poner(d, campos.claveId, cred.clave)
                 valores++
             }
             if (valores > 0) {
@@ -303,7 +322,7 @@ object ConstructorRespuesta {
             hay = true
         }
         Log.d("BovedaAutofill", "respuesta con datos: coincidencias=" + conjuntos + " guardar=" + (campos.claveId != null))
-        return if (hay) b.build() else null
+        return Resultado(if (hay) b.build() else null, conjuntos)
     }
 }
 
@@ -341,7 +360,9 @@ class BovedaAutofillService : AutofillService() {
                 return
             }
             if (!SesionBoveda.desbloqueada) {
-                Log.d("BovedaAutofill", "bóveda cerrada: se ofrece desbloquear")
+                // Si el formulario ya tiene una contraseña tecleada (por ejemplo, un registro), se recuerda unos minutos en memoria.
+                PendienteGuardar.guardar(campos.usuarioValor, campos.claveValor, campos.dominioWeb, campos.paquete)
+                Log.d("BovedaAutofill", "bóveda cerrada: se ofrece desbloquear (datos retenidos=" + PendienteGuardar.hay() + ")")
                 callback.onSuccess(ConstructorRespuesta.pedirDesbloqueo(this, campos, peticion))
                 return
             }
@@ -368,7 +389,16 @@ class BovedaAutofillService : AutofillService() {
             return
         }
         if (!SesionBoveda.desbloqueada) {
-            callback.onFailure("La Bóveda está bloqueada. Desbloquéala y guarda la contraseña desde la app.")
+            PendienteGuardar.guardar(campos.usuarioValor, campos.claveValor, campos.dominioWeb, campos.paquete)
+            Log.d("BovedaAutofill", "guardar con la bóveda cerrada: se pide desbloquear")
+            if (Build.VERSION.SDK_INT >= 28) {
+                val intent = Intent(this, DesbloqueoActivity::class.java)
+                intent.putExtra(ExtrasAutofill.ES_GUARDAR, true)
+                val pendiente = PendingIntent.getActivity(this, 2, intent, PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                callback.onSuccess(pendiente.intentSender)
+            } else {
+                callback.onFailure("La Bóveda está bloqueada. Desbloquéala y guarda la contraseña desde la app.")
+            }
             return
         }
         ambito.launch {
@@ -394,6 +424,9 @@ class BovedaAutofillService : AutofillService() {
                     )
                 }
                 callback.onSuccess()
+                android.os.Handler(android.os.Looper.getMainLooper()).post {
+                    android.widget.Toast.makeText(applicationContext, "Guardado en La Bóveda", android.widget.Toast.LENGTH_SHORT).show()
+                }
             } catch (e: Exception) {
                 callback.onFailure("No se pudo guardar: " + e.javaClass.simpleName)
             }
