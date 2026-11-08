@@ -36,6 +36,15 @@ class EditarCredencialActivity : ActividadBoveda() {
     override fun alCrear(estado: Bundle?) {
         id = intent.getLongExtra(EXTRA_ID, 0L)
         construirUi()
+        if (id == 0L) {
+            // Relleno previo (por ejemplo, desde un formulario de registro visto por el autorrelleno)
+            titulo.setText(intent.getStringExtra(EXTRA_PRE_TITULO) ?: "")
+            usuario.setText(intent.getStringExtra(EXTRA_PRE_USUARIO) ?: "")
+            clave.setText(intent.getStringExtra(EXTRA_PRE_CLAVE) ?: "")
+            url.setText(intent.getStringExtra(EXTRA_PRE_URL) ?: "")
+            app.setText(intent.getStringExtra(EXTRA_PRE_APP) ?: "")
+            actualizarFuerza()
+        }
         if (id != 0L) {
             lifecycleScope.launch {
                 val c = withContext(Dispatchers.IO) { BovedaDb.actual()?.credenciales()?.porId(id) }
@@ -198,5 +207,10 @@ class EditarCredencialActivity : ActividadBoveda() {
 
     companion object {
         const val EXTRA_ID = "id"
+        const val EXTRA_PRE_TITULO = "pre_titulo"
+        const val EXTRA_PRE_USUARIO = "pre_usuario"
+        const val EXTRA_PRE_CLAVE = "pre_clave"
+        const val EXTRA_PRE_URL = "pre_url"
+        const val EXTRA_PRE_APP = "pre_app"
     }
 }
